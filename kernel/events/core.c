@@ -2009,8 +2009,8 @@ event_sched_out(struct perf_event *event,
 	event->pmu->del(event, 0);
 	event->oncpu = -1;
 
-	if (event->pending_disable) {
-		event->pending_disable = 0;
+	if (READ_ONCE(event->pending_disable) >= 0) {
+		WRITE_ONCE(event->pending_disable, -1);
 		state = PERF_EVENT_STATE_OFF;
 	}
 	perf_event_set_state(event, state);
@@ -2198,7 +2198,8 @@ EXPORT_SYMBOL_GPL(perf_event_disable);
 
 void perf_event_disable_inatomic(struct perf_event *event)
 {
-	event->pending_disable = 1;
+	WRITE_ONCE(event->pending_disable, smp_processor_id());
+	/* can fail, see perf_pending_event_disable() */
 	irq_work_queue(&event->pending);
 }
 
@@ -2475,6 +2476,16 @@ static void ctx_resched(struct perf_cpu_context *cpuctx,
 
 	perf_event_sched_in(cpuctx, task_ctx, current);
 	perf_pmu_enable(cpuctx->ctx.pmu);
+}
+
+void perf_pmu_resched(struct pmu *pmu)
+{
+	struct perf_cpu_context *cpuctx = this_cpu_ptr(pmu->pmu_cpu_context);
+	struct perf_event_context *task_ctx = cpuctx->task_ctx;
+
+	perf_ctx_lock(cpuctx, task_ctx);
+	ctx_resched(cpuctx, task_ctx, EVENT_ALL|EVENT_CPU);
+	perf_ctx_unlock(cpuctx, task_ctx);
 }
 
 /*
@@ -4994,6 +5005,9 @@ static int perf_event_period(struct perf_event *event, u64 __user *arg)
 	if (perf_event_check_period(event, value))
 		return -EINVAL;
 
+	if (!event->attr.freq && (value & (1ULL << 63)))
+		return -EINVAL;
+
 	event_function_call(event, __perf_event_period, &value);
 
 	return 0;
@@ -5810,10 +5824,45 @@ void perf_event_wakeup(struct perf_event *event)
 	}
 }
 
+static void perf_pending_event_disable(struct perf_event *event)
+{
+	int cpu = READ_ONCE(event->pending_disable);
+
+	if (cpu < 0)
+		return;
+
+	if (cpu == smp_processor_id()) {
+		WRITE_ONCE(event->pending_disable, -1);
+		perf_event_disable_local(event);
+		return;
+	}
+
+	/*
+	 *  CPU-A			CPU-B
+	 *
+	 *  perf_event_disable_inatomic()
+	 *    @pending_disable = CPU-A;
+	 *    irq_work_queue();
+	 *
+	 *  sched-out
+	 *    @pending_disable = -1;
+	 *
+	 *				sched-in
+	 *				perf_event_disable_inatomic()
+	 *				  @pending_disable = CPU-B;
+	 *				  irq_work_queue(); // FAILS
+	 *
+	 *  irq_work_run()
+	 *    perf_pending_event()
+	 *
+	 * But the event runs on CPU-B and wants disabling there.
+	 */
+	irq_work_queue_on(&event->pending, cpu);
+}
+
 static void perf_pending_event(struct irq_work *entry)
 {
-	struct perf_event *event = container_of(entry,
-			struct perf_event, pending);
+	struct perf_event *event = container_of(entry, struct perf_event, pending);
 	int rctx;
 
 	rctx = perf_swevent_get_recursion_context();
@@ -5822,10 +5871,7 @@ static void perf_pending_event(struct irq_work *entry)
 	 * and we won't recurse 'further'.
 	 */
 
-	if (event->pending_disable) {
-		event->pending_disable = 0;
-		perf_event_disable_local(event);
-	}
+	perf_pending_event_disable(event);
 
 	if (event->pending_wakeup) {
 		event->pending_wakeup = 0;
@@ -5880,7 +5926,7 @@ static void perf_sample_regs_user(struct perf_regs *regs_user,
 	if (user_mode(regs)) {
 		regs_user->abi = perf_reg_abi(current);
 		regs_user->regs = regs;
-	} else if (current->mm) {
+	} else if (!(current->flags & PF_KTHREAD)) {
 		perf_get_regs_user(regs_user, regs, regs_user_copy);
 	} else {
 		regs_user->abi = PERF_SAMPLE_REGS_ABI_NONE;
@@ -7189,6 +7235,7 @@ static void perf_event_mmap_output(struct perf_event *event,
 	struct perf_output_handle handle;
 	struct perf_sample_data sample;
 	int size = mmap_event->event_id.header.size;
+	u32 type = mmap_event->event_id.header.type;
 	int ret;
 
 	if (!perf_event_mmap_match(event, data))
@@ -7232,6 +7279,7 @@ static void perf_event_mmap_output(struct perf_event *event,
 	perf_output_end(&handle);
 out:
 	mmap_event->event_id.header.size = size;
+	mmap_event->event_id.header.type = type;
 }
 
 static void perf_event_mmap_event(struct perf_mmap_event *mmap_event)
@@ -9042,26 +9090,29 @@ static void perf_event_addr_filters_apply(struct perf_event *event)
 	if (task == TASK_TOMBSTONE)
 		return;
 
-	if (!ifh->nr_file_filters)
-		return;
+	if (ifh->nr_file_filters) {
+		mm = get_task_mm(event->ctx->task);
+		if (!mm)
+			goto restart;
 
-	mm = get_task_mm(event->ctx->task);
-	if (!mm)
-		goto restart;
-
-	down_read(&mm->mmap_sem);
+		down_read(&mm->mmap_sem);
+	}
 
 	raw_spin_lock_irqsave(&ifh->lock, flags);
 	list_for_each_entry(filter, &ifh->list, entry) {
-		event->addr_filter_ranges[count].start = 0;
-		event->addr_filter_ranges[count].size = 0;
+		if (filter->path.dentry) {
+			/*
+			 * Adjust base offset if the filter is associated to a
+			 * binary that needs to be mapped:
+			 */
+			event->addr_filter_ranges[count].start = 0;
+			event->addr_filter_ranges[count].size = 0;
 
-		/*
-		 * Adjust base offset if the filter is associated to a binary
-		 * that needs to be mapped:
-		 */
-		if (filter->path.dentry)
 			perf_addr_filter_apply(filter, mm, &event->addr_filter_ranges[count]);
+		} else {
+			event->addr_filter_ranges[count].start = filter->offset;
+			event->addr_filter_ranges[count].size  = filter->size;
+		}
 
 		count++;
 	}
@@ -9069,9 +9120,11 @@ static void perf_event_addr_filters_apply(struct perf_event *event)
 	event->addr_filters_gen++;
 	raw_spin_unlock_irqrestore(&ifh->lock, flags);
 
-	up_read(&mm->mmap_sem);
+	if (ifh->nr_file_filters) {
+		up_read(&mm->mmap_sem);
 
-	mmput(mm);
+		mmput(mm);
+	}
 
 restart:
 	perf_event_stop(event, 1);
@@ -9983,6 +10036,12 @@ void perf_pmu_unregister(struct pmu *pmu)
 }
 EXPORT_SYMBOL_GPL(perf_pmu_unregister);
 
+static inline bool has_extended_regs(struct perf_event *event)
+{
+	return (event->attr.sample_regs_user & PERF_REG_EXTENDED_MASK) ||
+	       (event->attr.sample_regs_intr & PERF_REG_EXTENDED_MASK);
+}
+
 static int perf_try_init_event(struct pmu *pmu, struct perf_event *event)
 {
 	struct perf_event_context *ctx = NULL;
@@ -10014,12 +10073,16 @@ static int perf_try_init_event(struct pmu *pmu, struct perf_event *event)
 		perf_event_ctx_unlock(event->group_leader, ctx);
 
 	if (!ret) {
+		if (!(pmu->capabilities & PERF_PMU_CAP_EXTENDED_REGS) &&
+		    has_extended_regs(event))
+			ret = -EOPNOTSUPP;
+
 		if (pmu->capabilities & PERF_PMU_CAP_NO_EXCLUDE &&
-				event_has_any_exclude_flag(event)) {
-			if (event->destroy)
-				event->destroy(event);
+		    event_has_any_exclude_flag(event))
 			ret = -EINVAL;
-		}
+
+		if (ret && event->destroy)
+			event->destroy(event);
 	}
 
 	if (ret)
@@ -10234,6 +10297,7 @@ perf_event_alloc(struct perf_event_attr *attr, int cpu,
 
 
 	init_waitqueue_head(&event->waitq);
+	event->pending_disable = -1;
 	init_irq_work(&event->pending, perf_pending_event);
 
 	mutex_init(&event->mmap_mutex);
@@ -11876,7 +11940,7 @@ static void __init perf_event_init_all_cpus(void)
 	}
 }
 
-void perf_swevent_init_cpu(unsigned int cpu)
+static void perf_swevent_init_cpu(unsigned int cpu)
 {
 	struct swevent_htable *swhash = &per_cpu(swevent_htable, cpu);
 

@@ -1,10 +1,6 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Copyright 2009 Freescale Semiconductor, Inc.
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version
- * 2 of the License, or (at your option) any later version.
  *
  * provides masks and opcode images for use by code generation, emulation
  * and for instructions that older assemblers might not know about
@@ -302,6 +298,7 @@
 /* Misc instructions for BPF compiler */
 #define PPC_INST_LBZ			0x88000000
 #define PPC_INST_LD			0xe8000000
+#define PPC_INST_LDX			0x7c00002a
 #define PPC_INST_LHZ			0xa0000000
 #define PPC_INST_LWZ			0x80000000
 #define PPC_INST_LHBRX			0x7c00062c
@@ -309,6 +306,7 @@
 #define PPC_INST_STB			0x98000000
 #define PPC_INST_STH			0xb0000000
 #define PPC_INST_STD			0xf8000000
+#define PPC_INST_STDX			0x7c00012a
 #define PPC_INST_STDU			0xf8000001
 #define PPC_INST_STW			0x90000000
 #define PPC_INST_STWU			0x94000000
@@ -340,6 +338,7 @@
 #define PPC_INST_MADDLD			0x10000033
 #define PPC_INST_DIVWU			0x7c000396
 #define PPC_INST_DIVD			0x7c0003d2
+#define PPC_INST_DIVDU			0x7c000392
 #define PPC_INST_RLWINM			0x54000000
 #define PPC_INST_RLWINM_DOT		0x54000001
 #define PPC_INST_RLWIMI			0x50000000

@@ -1,11 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * VXLAN: Virtual eXtensible Local Area Network
  *
  * Copyright (c) 2012-2013 Vyatta Inc.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
@@ -20,6 +17,7 @@
 #include <linux/ethtool.h>
 #include <net/arp.h>
 #include <net/ndisc.h>
+#include <net/ipv6_stubs.h>
 #include <net/ip.h>
 #include <net/icmp.h>
 #include <net/rtnetlink.h>
@@ -1765,7 +1763,7 @@ static int vxlan_err_lookup(struct sock *sk, struct sk_buff *skb)
 	struct vxlanhdr *hdr;
 	__be32 vni;
 
-	if (skb->len < VXLAN_HLEN)
+	if (!pskb_may_pull(skb, skb_transport_offset(skb) + VXLAN_HLEN))
 		return -EINVAL;
 
 	hdr = vxlan_hdr(skb);
@@ -4335,10 +4333,8 @@ static void vxlan_destroy_tunnels(struct net *net, struct list_head *head)
 		/* If vxlan->dev is in the same netns, it has already been added
 		 * to the list by the previous loop.
 		 */
-		if (!net_eq(dev_net(vxlan->dev), net)) {
-			gro_cells_destroy(&vxlan->gro_cells);
+		if (!net_eq(dev_net(vxlan->dev), net))
 			unregister_netdevice_queue(vxlan->dev, head);
-		}
 	}
 
 	for (h = 0; h < PORT_HASH_SIZE; ++h)
