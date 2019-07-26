@@ -35,7 +35,10 @@
 #include <trace/events/cma.h>
 
 #include "cma.h"
-
+/*
+* global cma arry,reserve-memory(linux,cma{linux,cma-default
+  per-device private:
+*/
 struct cma cma_areas[MAX_CMA_AREAS];
 unsigned cma_area_count;
 static DEFINE_MUTEX(cma_mutex);
