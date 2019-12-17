@@ -146,7 +146,9 @@ not_in_zone:
 	cma->count = 0;
 	return -EINVAL;
 }
-
+/*
+* free cma of memblock.reserved to buddy 
+*/
 static int __init cma_init_reserved_areas(void)
 {
 	int i;

@@ -170,9 +170,10 @@ static void __init smp_build_mpidr_hash(void)
 
 static void __init setup_machine_fdt(phys_addr_t dt_phys)
 {
+        //memblock.reserve
 	void *dt_virt = fixmap_remap_fdt(dt_phys);
 	const char *name;
-
+        //memblock.memory save physical in dts memory node
 	if (!dt_virt || !early_init_dt_scan(dt_virt)) {
 		pr_crit("\n"
 			"Error: invalid device tree blob at physical address %pa (virtual address 0x%p)\n"

@@ -90,7 +90,13 @@
 /* use the per-pgdat data instead for discontigmem - mbligh */
 unsigned long max_mapnr;
 EXPORT_SYMBOL(max_mapnr);
-
+/*
+ * mem_map global save physic memory,use page ;
+   the node->node_mem_map;
+   mem_map init in alloc_node_mem_map;
+   the size = pfn_end-pfn_start * sizeof(struct page);
+   user memblock_alloc_node ->memblock_reserve 
+*/
 struct page *mem_map;
 EXPORT_SYMBOL(mem_map);
 #endif

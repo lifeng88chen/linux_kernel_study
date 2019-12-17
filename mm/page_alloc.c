@@ -6729,7 +6729,7 @@ static void __ref alloc_node_mem_map(struct pglist_data *pgdat)
 	/* Skip empty nodes */
 	if (!pgdat->node_spanned_pages)
 		return;
-
+        
 	start = pgdat->node_start_pfn & ~(MAX_ORDER_NR_PAGES - 1);
 	offset = pgdat->node_start_pfn - start;
 	/* ia64 gets its own node_mem_map, before this, without bootmem */
@@ -6745,6 +6745,7 @@ static void __ref alloc_node_mem_map(struct pglist_data *pgdat)
 		end = pgdat_end_pfn(pgdat);
 		end = ALIGN(end, MAX_ORDER_NR_PAGES);
 		size =  (end - start) * sizeof(struct page);
+                //mem_map size
 		map = memblock_alloc_node(size, SMP_CACHE_BYTES,
 					  pgdat->node_id);
 		if (!map)

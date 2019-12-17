@@ -297,7 +297,9 @@ static void __init fdt_enforce_memory_region(void)
 	if (reg.size)
 		memblock_cap_memory_range(reg.base, reg.size);
 }
-
+/*
+  1.PAGE_OFFSET kernel iamge va
+*/
 void __init arm64_memblock_init(void)
 {
 	const s64 linear_region_size = -(s64)PAGE_OFFSET;
@@ -317,6 +319,10 @@ void __init arm64_memblock_init(void)
 
 	/*
 	 * Select a suitable value for the base of physical memory.
+	 */
+	/*
+	 * RAM start address for 1GB align,qcom for 0x80000000
+	 * /sys/kernel/debug/memblock/memory
 	 */
 	memstart_addr = round_down(memblock_start_of_DRAM(),
 				   ARM64_MEMSTART_ALIGN);
@@ -368,8 +374,10 @@ void __init arm64_memblock_init(void)
 			"initrd not fully accessible via the linear mapping -- please check your bootloader ...\n")) {
 			phys_initrd_size = 0;
 		} else {
+                        //2.remove initrd memory to reserve
 			memblock_remove(base, size); /* clear MEMBLOCK_ flags */
 			memblock_add(base, size);
+			//reserved initrd
 			memblock_reserve(base, size);
 		}
 	}
@@ -395,6 +403,7 @@ void __init arm64_memblock_init(void)
 	 * Register the kernel text, kernel data, initrd, and initial
 	 * pagetables with memblock.
 	 */
+	/*reserved kernel text */
 	memblock_reserve(__pa_symbol(_text), _end - _text);
 	if (IS_ENABLED(CONFIG_BLK_DEV_INITRD) && phys_initrd_size) {
 		/* the generic initrd code expects virtual addresses */
@@ -418,11 +427,12 @@ void __init arm64_memblock_init(void)
 
 	dma_contiguous_reserve(arm64_dma_phys_limit);
 }
-
+//the front,cma memory has been reserved.
+//init buddy ,buddy management memblock.memory,not reserve-memory
 void __init bootmem_init(void)
 {
 	unsigned long min, max;
-
+        //memblock.memory.regions[0].base~memblock.memory.regions[cnt-1].base+size
 	min = PFN_UP(memblock_start_of_DRAM());
 	max = PFN_DOWN(memblock_end_of_DRAM());
 
@@ -439,6 +449,9 @@ void __init bootmem_init(void)
 	memblocks_present();
 
 	sparse_init();
+        //buddy init  base of memblock.memory
+        //min is page frame pfn
+        //pfn connect  memblock and buddy for physical memory
 	zone_sizes_init(min, max);
 
 	memblock_dump_all();
